@@ -25,6 +25,9 @@ RUN mkdir -p /app/models
 # Copy application code
 COPY . .
 
+# Download models if they don't exist in the volume
+RUN python download_models.py
+
 # Set permissions
 RUN chmod -R 755 /app
 

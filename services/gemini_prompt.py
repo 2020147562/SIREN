@@ -1,81 +1,84 @@
-import google.generativeai as genai
+from fastapi import APIRouter, UploadFile, File, HTTPException
+from services.emotion_analysis import analyze_emotion
+from starlette.concurrency import run_in_threadpool
+import tempfile
 import os
 import logging
-# from rag.rag_engine import search_similar_cases
+import google.generativeai as genai
 
 logger = logging.getLogger(__name__)
+router = APIRouter()
 
 # Configure the Gemini API
-def configure_gemini():
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+
+@router.post("/analyze")
+async def analyze(
+    audio_file: UploadFile = File(None),
+    text_file: UploadFile = File(...)
+):
     try:
-        # Get API key from environment variable
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            raise ValueError("GEMINI_API_KEY environment variable is not set")
-        
-        # Configure the API
-        genai.configure(api_key=api_key)
-        
-        # Get available models
-        models = genai.list_models()
-        logger.info("Available Gemini models:")
-        for model in models:
-            logger.info(f"- {model.name}")
-            logger.info(f"  Supported methods: {model.supported_generation_methods}")
-        
-        return True
+        audio_path = None
+        if audio_file:
+            content = await audio_file.read()
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp:
+                tmp.write(content)
+                audio_path = tmp.name
+
+        text = (await text_file.read()).decode('utf-8')
+        logger.debug(f"Text input: {text[:100]}...")
+
+        result = await run_in_threadpool(analyze_emotion, audio_path, text)
+        if audio_path:
+            os.remove(audio_path)
+            logger.debug("Temporary audio file removed.")
+
+        danger_score, prompt = analyze_text_and_decide(text, result['all_emotions'])
+        return {"emotion": result, "danger_score": danger_score}
     except Exception as e:
-        logger.error(f"Error configuring Gemini API: {str(e)}")
-        return False
+        logger.error("Error in /analyze endpoint", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
-# Initialize Gemini configuration
-if not configure_gemini():
-    raise RuntimeError("Failed to configure Gemini API")
-
-def analyze_text_and_decide(text: str, emotion_result: dict) -> tuple[float, str]:
+def analyze_text_and_decide(text: str, emotion_results: dict) -> float:
+    """
+    Analyze text and emotion results to determine danger score.
+    Returns a float between 0-100.
+    """
     try:
-        # Create the model instance - using the flash model for better quota management
-        model = genai.GenerativeModel('gemini-2.0-flash')
-        
-        # Create the prompt with emotion analysis results
-        emotion_str = "\n".join([f"{emotion.capitalize()}: {score:.2%}" for emotion, score in emotion_result.items()])
+        # Create prompt
         prompt = f"""
-        Analyze the following text and emotion analysis results to determine the level of risk.
-        
-        Text:
-        {text}
-        
-        Emotion Analysis Results:
-        {emotion_str}
-        
-        Return ONLY a single number between 0-100 representing the risk level, where:
-        - 0-59: Safe or minor concerns
-        - 60-74: Moderate risk - potential for minor physical/mental violence, but not reportable
-        - 75-89: High risk - reportable to acquaintances, potential for moderate physical/mental violence
-        - 90-100: Severe risk - reportable to authorities (police/embassy), significant physical/mental violence
-        
-        Do not include any other text or explanation, just the number.
+        Analyze the following text and emotion analysis results to determine a danger score (0-100).
+        Return ONLY a single number between 0-100.
+
+        Text: {text}
+        Emotion Analysis: {emotion_results}
+
+        Danger Score Criteria:
+        0-59: Low risk - Normal conversation or positive emotions
+        60-74: Moderate risk - Some concerning elements
+        75-89: High risk - Significant concerning elements
+        90-100: Critical risk - Immediate attention required
+
+        Return ONLY the number:
         """
-        
-        # Generate response using generateContent
+
+        # Generate response
+        model = genai.GenerativeModel('gemini-1.0-pro')
         response = model.generate_content(prompt)
         
-        # Extract danger score from response
-        danger_score = 0.0  # Default to safe
+        # Extract number from response
         try:
-            # Extract the first number from the response
+            # Try to find a number in the response
             import re
-            numbers = re.findall(r'\b(?:100|[1-9]?[0-9])\b', response.text)
+            numbers = re.findall(r'\d+', response.text)
             if numbers:
-                danger_score = float(numbers[0])
-                logger.info(f"Extracted danger score: {danger_score}")
-            else:
-                logger.warning("No valid score found in response")
-        except Exception as e:
-            logger.warning(f"Could not extract danger score from response: {str(e)}")
+                score = float(numbers[0])
+                return min(max(score, 0), 100)  # Ensure score is between 0-100
+        except:
+            pass
         
-        return danger_score, response.text
+        return 0.0  # Default score if no number found
         
     except Exception as e:
-        logger.error(f"Error in analyze_text_and_decide: {str(e)}")
-        raise
+        logger.error(f"Error in text analysis: {str(e)}")
+        return 0.0
