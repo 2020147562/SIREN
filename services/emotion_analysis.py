@@ -1,5 +1,6 @@
 import torch
 import torchaudio
+from torch.nn.utils.rnn import pad_sequence
 from transformers import (
     AutoFeatureExtractor,
     Wav2Vec2ForSequenceClassification,
@@ -51,8 +52,10 @@ OVERLAP = 1.0        # seconds
 
 def analyze_audio(audio_path: str) -> dict:
     waveform, sr = torchaudio.load(audio_path)
+    # mono
     if waveform.dim() > 1:
         waveform = waveform.mean(dim=0, keepdim=True)
+    # resample
     if sr != feature_extractor.sampling_rate:
         waveform = get_resampler(sr)(waveform)
         sr = feature_extractor.sampling_rate
@@ -61,26 +64,35 @@ def analyze_audio(audio_path: str) -> dict:
     step = WINDOW_SIZE - OVERLAP
     segments = []
     start = 0.0
+    # 1) 세그먼트 자르고
     while start < total_sec:
         end = min(start + WINDOW_SIZE, total_sec)
-        segment = waveform[:, int(start * sr):int(end * sr)].squeeze(0)
-        segments.append(segment)
+        seg = waveform[:, int(start * sr):int(end * sr)].squeeze(0)
+        segments.append(seg)
         start += step
 
-    # Batch inference for audio segments
+    # 2) 길이가 다른 세그먼트를 패딩해서 (batch, time) 텐서로 만들기
+    # pad_sequence는 [T_i] 리스트를 [batch, max(T_i)] 로 채워줍니다.
+    segments_padded = pad_sequence(segments, batch_first=True)  # shape: (batch, max_len)
+
+    # 3) feature_extractor에 바로 넘기기
+    #    huggingface feature_extractor는 torch.Tensor 도 받아줍니다.
     inputs = feature_extractor(
-        segments,
+        segments_padded,           # torch.Tensor
         sampling_rate=sr,
         return_tensors="pt",
-        padding=True
+        padding=True               # 사실 이 옵션은 이제 필요 없지만 남겨도 안전합니다
     )
     inputs = {k: v.to(device) for k, v in inputs.items()}
+
     with torch.no_grad():
-        logits = audio_model(**inputs).logits
+        logits = audio_model(**inputs).logits    # (batch, num_labels)
         probs = torch.nn.functional.softmax(logits, dim=-1).mean(dim=0)
 
-    # Map to labels
-    return {label: float(probs[audio_model.config.label2id[label]]) for label in EMOTION_LABELS}
+    return {
+        label: float(probs[audio_model.config.label2id[label]])
+        for label in EMOTION_LABELS
+    }
 
 
 def analyze_text(text: str) -> dict:
