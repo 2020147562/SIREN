@@ -1,0 +1,22 @@
+version: '3'
+
+services:
+  siren:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: siren-api:v1.0
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+    restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    volumes:
+      - ./api:/app/api:ro
+      - ./services:/app/services:ro
+      - ./models:/app/models:rw
