@@ -30,7 +30,7 @@ async def analyze(
             os.remove(audio_path)
             logger.debug("Temporary audio file removed.")
 
-        danger_score, prompt = analyze_text_and_decide(text, result['all_emotions'])
+        danger_score = analyze_text_and_decide(text, result['all_emotions'])
         return {"emotion": result, "danger_score": danger_score}
     except Exception as e:
         logger.error("Error in /analyze endpoint", exc_info=True)

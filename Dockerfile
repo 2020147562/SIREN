@@ -25,11 +25,16 @@ RUN mkdir -p /app/models
 # Copy application code
 COPY . .
 
-# Download models if they don't exist in the volume
-RUN python download_models.py
-
 # Set permissions
 RUN chmod -R 755 /app
 
+# Create a script to check and download models if needed
+RUN echo '#!/bin/bash\n\
+if [ ! -f "/app/models/config.json" ]; then\n\
+    python download_models.py\n\
+fi\n\
+uvicorn main:app --host 0.0.0.0 --port 8000' > /app/start.sh && \
+    chmod +x /app/start.sh
+
 # Run the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["/app/start.sh"]
