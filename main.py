@@ -12,8 +12,8 @@ app.include_router(api_router)
 
 # CORS 설정
 origins = [
-    "https://your-firebase-app.web.app",  # firebase 백엔드 주소소
-    "http://localhost:8000",              # 개발용 로컬 주소
+    "https://handledangerrequest-aoviljd5hq-du.a.run.app",
+    "http://localhost:8000",
 ]
 
 app.add_middleware(
